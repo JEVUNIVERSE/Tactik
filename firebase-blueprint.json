@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Public digital identity data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner's Firebase Auth UID" },
+        "username": { "type": "string", "description": "Unique handle for the profile URL" },
+        "displayName": { "type": "string" },
+        "title": { "type": "string", "description": "Professional title" },
+        "bio": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "email": { "type": "string" },
+        "website": { "type": "string" },
+        "socialLinks": {
+          "type": "object",
+          "properties": {
+            "linkedin": { "type": "string" },
+            "twitter": { "type": "string" },
+            "instagram": { "type": "string" }
+          }
+        },
+        "viewCount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "username", "displayName"]
+    },
+    "AnalyticsEvent": {
+      "title": "Analytics Event",
+      "description": "Tracks profile views",
+      "type": "object",
+      "properties": {
+        "profileId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userAgent": { "type": "string" }
+      }
+    },
+    "Order": {
+      "title": "NFC Card Order",
+      "description": "Order for a physical TACTIK NFC card",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "paid", "shipped", "cancelled"] },
+        "amount": { "type": "number" },
+        "shippingAddress": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "status", "amount", "shippingAddress"]
+    }
+  },
+  "firestore": {
+    "/profiles/{profileId}": {
+      "schema": "UserProfile",
+      "description": "Public profiles mapped by document ID (usually same as username or UID)"
+    },
+    "/usernames/{username}": {
+      "schema": { "type": "object", "properties": { "uid": { "type": "string" } } },
+      "description": "Mapping of unique usernames to UIDs"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "NFC card purchase orders"
+    }
+  }
+}
