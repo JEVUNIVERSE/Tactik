@@ -17,12 +17,13 @@ export interface UserProfile {
 }
 
 export interface Order {
-  id?: string;
+  id: string;
   uid: string;
   username: string;
-  status: 'pending' | 'paid' | 'shipped' | 'cancelled';
+  status: string;
   amount: number;
   shippingAddress: string;
   createdAt: string;
   updatedAt: string;
 }
+

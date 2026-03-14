@@ -2,17 +2,17 @@
   "entities": {
     "UserProfile": {
       "title": "User Profile",
-      "description": "Public digital identity data",
+      "description": "Public and private profile data for a TACTIK user.",
       "type": "object",
       "properties": {
-        "uid": { "type": "string", "description": "Owner's Firebase Auth UID" },
-        "username": { "type": "string", "description": "Unique handle for the profile URL" },
-        "displayName": { "type": "string" },
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "username": { "type": "string", "description": "Unique handle" },
+        "displayName": { "type": "string", "description": "Display name" },
         "title": { "type": "string", "description": "Professional title" },
-        "bio": { "type": "string" },
-        "whatsapp": { "type": "string" },
-        "email": { "type": "string" },
-        "website": { "type": "string" },
+        "bio": { "type": "string", "description": "Short biography" },
+        "whatsapp": { "type": "string", "description": "WhatsApp contact number" },
+        "email": { "type": "string", "description": "Contact email" },
+        "website": { "type": "string", "description": "Personal or business website" },
         "socialLinks": {
           "type": "object",
           "properties": {
@@ -21,24 +21,23 @@
             "instagram": { "type": "string" }
           }
         },
-        "viewCount": { "type": "number" },
+        "viewCount": { "type": "number", "description": "Total profile views/taps" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "username", "displayName"]
     },
-    "AnalyticsEvent": {
-      "title": "Analytics Event",
-      "description": "Tracks profile views",
+    "Username": {
+      "title": "Username Mapping",
+      "description": "Maps a unique username to a UID.",
       "type": "object",
       "properties": {
-        "profileId": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "userAgent": { "type": "string" }
-      }
+        "uid": { "type": "string" }
+      },
+      "required": ["uid"]
     },
     "Order": {
-      "title": "NFC Card Order",
-      "description": "Order for a physical TACTIK NFC card",
+      "title": "Card Order",
+      "description": "NFC card order details.",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -49,21 +48,21 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "status", "amount", "shippingAddress"]
+      "required": ["uid", "username", "status", "amount", "shippingAddress", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
-    "/profiles/{profileId}": {
+    "profiles/{uid}": {
       "schema": "UserProfile",
-      "description": "Public profiles mapped by document ID (usually same as username or UID)"
+      "description": "User profile documents."
     },
-    "/usernames/{username}": {
-      "schema": { "type": "object", "properties": { "uid": { "type": "string" } } },
-      "description": "Mapping of unique usernames to UIDs"
+    "usernames/{username}": {
+      "schema": "Username",
+      "description": "Username to UID mapping."
     },
-    "/orders/{orderId}": {
+    "orders/{orderId}": {
       "schema": "Order",
-      "description": "NFC card purchase orders"
+      "description": "NFC card orders."
     }
   }
 }

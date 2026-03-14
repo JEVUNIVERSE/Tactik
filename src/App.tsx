@@ -46,6 +46,94 @@ import { UserProfile, Order } from './types';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+// --- Error Handling ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let message = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.error.message);
+        if (parsed.error) message = `Database Error: ${parsed.error}`;
+      } catch (e) {
+        message = this.state.error.message || message;
+      }
+
+      return (
+        <div className="min-h-screen bg-black flex items-center justify-center p-12 text-center">
+          <div className="space-y-8 max-w-xl">
+            <h2 className="text-6xl font-black tracking-tighter uppercase text-white">SYSTEM ERROR.</h2>
+            <p className="text-zinc-500 font-black uppercase tracking-widest text-sm leading-relaxed">
+              {message}
+            </p>
+            <Button onClick={() => window.location.reload()} className="w-full h-20">REBOOT SYSTEM.</Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const LOGO_URL = "https://storage.googleapis.com/static.mira.ai/agent_attachments/9364409d-092b-4786-9a2c-901804369792/input_file_0.png";
 
 function cn(...inputs: ClassValue[]) {
@@ -142,6 +230,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Immediate route detection
   const path = window.location.pathname;
@@ -168,15 +258,29 @@ export default function App() {
         setProfile(docSnap.data() as UserProfile);
       }
     } catch (e) {
-      console.error("Error fetching profile:", e);
+      handleFirestoreError(e, OperationType.GET, `profiles/${uid}`);
     }
   };
 
   const handleLogin = async () => {
+    if (isLoggingIn) return;
+    setIsLoggingIn(true);
+    setAuthError(null);
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login failed", error);
+      if (error.code === 'auth/popup-blocked') {
+        setAuthError("Popup blocked. Please allow popups for this site.");
+      } else if (error.code === 'auth/cancelled-popup-request') {
+        // Ignore, usually means another request was started
+      } else if (error.code === 'auth/popup-closed-by-user') {
+        // Ignore
+      } else {
+        setAuthError("Login failed. Please try again.");
+      }
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -201,50 +305,66 @@ export default function App() {
     </div>
   );
 
-  if (!user) return <Landing onLogin={handleLogin} />;
+  if (!user) return <Landing onLogin={handleLogin} isLoggingIn={isLoggingIn} authError={authError} />;
 
   return (
-    <div className="min-h-screen bg-black text-white font-sans">
-      <nav className="bg-black border-b border-zinc-900 px-12 py-8 flex justify-between items-center sticky top-0 z-50">
-        <div className="flex items-center gap-6">
-          <img src={LOGO_URL} alt="TACTIK" className="w-12 h-12 invert" referrerPolicy="no-referrer" />
-          <div className="font-black text-3xl tracking-tighter uppercase">TACTIK.</div>
-        </div>
-        <div className="flex items-center gap-8">
-          {isAdmin && (
-            <div className="px-4 py-2 bg-white text-black text-[10px] font-black tracking-widest uppercase">Admin Mode</div>
-          )}
-          <button onClick={handleLogout} className="text-zinc-500 hover:text-white transition-colors">
-            <LogOut size={28} />
-          </button>
-        </div>
-      </nav>
-
-      <main className="max-w-4xl mx-auto p-6 space-y-12 pb-24">
-        {!profile ? (
-          <Onboarding uid={user.uid} onComplete={() => fetchProfile(user.uid)} />
-        ) : (
-          <>
-            {isAdmin ? (
-              <div className="space-y-12">
-                <Dashboard profile={profile} onUpdate={setProfile} />
-                <AdminOrders isAdmin={isAdmin} />
-              </div>
-            ) : (
-              <Dashboard profile={profile} onUpdate={setProfile} />
+    <ErrorBoundary>
+      <div className="min-h-screen bg-black text-white font-sans">
+        <nav className="bg-black border-b border-zinc-900 px-12 py-8 flex justify-between items-center sticky top-0 z-50">
+          <div className="flex items-center gap-6">
+            <img src={LOGO_URL} alt="TACTIK" className="w-12 h-12 invert" referrerPolicy="no-referrer" />
+            <div className="font-black text-3xl tracking-tighter uppercase">TACTIK.</div>
+          </div>
+          <div className="flex items-center gap-8">
+            {isAdmin && (
+              <div className="px-4 py-2 bg-white text-black text-[10px] font-black tracking-widest uppercase">Admin Mode</div>
             )}
-          </>
-        )}
-      </main>
-    </div>
+            <button onClick={handleLogout} className="text-zinc-500 hover:text-white transition-colors">
+              <LogOut size={28} />
+            </button>
+          </div>
+        </nav>
+
+        <main className="max-w-4xl mx-auto p-6 space-y-12 pb-24">
+          {!profile ? (
+            <Onboarding uid={user.uid} onComplete={() => fetchProfile(user.uid)} />
+          ) : (
+            <>
+              {isAdmin ? (
+                <div className="space-y-12">
+                  <Dashboard profile={profile} onUpdate={setProfile} />
+                  <AdminOrders isAdmin={isAdmin} />
+                </div>
+              ) : (
+                <Dashboard profile={profile} onUpdate={setProfile} />
+              )}
+            </>
+          )}
+        </main>
+      </div>
+    </ErrorBoundary>
   );
 }
 
 // --- Sub-components ---
 
-function Landing({ onLogin }: { onLogin: () => void }) {
+function Landing({ onLogin, isLoggingIn, authError }: { onLogin: () => void; isLoggingIn: boolean; authError: string | null }) {
   return (
     <div className="min-h-screen bg-black text-white selection:bg-white selection:text-black">
+      {/* Auth Error Toast */}
+      <AnimatePresence>
+        {authError && (
+          <motion.div 
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
+            className="fixed top-8 left-1/2 -translate-x-1/2 z-[200] bg-red-600 text-white px-8 py-4 font-black uppercase tracking-widest text-sm shadow-2xl border-2 border-white"
+          >
+            {authError}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Navigation */}
       <nav className="flex justify-between items-center px-12 py-16">
         <div className="flex items-center gap-6">
@@ -252,11 +372,11 @@ function Landing({ onLogin }: { onLogin: () => void }) {
           <div className="font-black text-5xl tracking-tighter uppercase">TACTIK.</div>
         </div>
         <div className="flex gap-4 md:gap-6">
-          <Button onClick={onLogin} variant="outline" className="h-12 md:h-16 px-6 md:px-12 text-sm md:text-base">
-            Log In
+          <Button onClick={onLogin} disabled={isLoggingIn} variant="outline" className="h-12 md:h-16 px-6 md:px-12 text-sm md:text-base">
+            {isLoggingIn ? '...' : 'Log In'}
           </Button>
-          <Button onClick={onLogin} className="h-12 md:h-16 px-6 md:px-12 text-sm md:text-base">
-            Get Started
+          <Button onClick={onLogin} disabled={isLoggingIn} className="h-12 md:h-16 px-6 md:px-12 text-sm md:text-base">
+            {isLoggingIn ? '...' : 'Get Started'}
           </Button>
         </div>
       </nav>
@@ -293,14 +413,14 @@ function Landing({ onLogin }: { onLogin: () => void }) {
           className="pt-16 w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8"
         >
           <div className="space-y-6">
-            <Button onClick={onLogin} className="w-full h-32 text-3xl shadow-[20px_20px_0px_0px_rgba(255,255,255,1)]">
-              SIGN UP <ChevronRight size={40} />
+            <Button onClick={onLogin} disabled={isLoggingIn} className="w-full h-32 text-3xl shadow-[20px_20px_0px_0px_rgba(255,255,255,1)]">
+              {isLoggingIn ? 'WAITING...' : 'SIGN UP'} <ChevronRight size={40} />
             </Button>
             <p className="text-zinc-500 text-xs font-black uppercase tracking-widest">New to TACTIK? Claim your handle now.</p>
           </div>
           <div className="space-y-6">
-            <Button onClick={onLogin} variant="outline" className="w-full h-32 text-3xl">
-              LOG IN.
+            <Button onClick={onLogin} disabled={isLoggingIn} variant="outline" className="w-full h-32 text-3xl">
+              {isLoggingIn ? '...' : 'LOG IN.'}
             </Button>
             <p className="text-zinc-500 text-xs font-black uppercase tracking-widest">Already have an identity? Access your vault.</p>
           </div>
@@ -349,7 +469,7 @@ function Landing({ onLogin }: { onLogin: () => void }) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-12 w-full max-w-6xl">
-          <div className="p-16 border-4 border-white space-y-10 text-left bg-zinc-950 group hover:bg-white hover:text-black transition-all cursor-pointer" onClick={onLogin}>
+          <div className="p-16 border-4 border-white space-y-10 text-left bg-zinc-950 group hover:bg-white hover:text-black transition-all cursor-pointer" onClick={() => !isLoggingIn && onLogin()}>
             <div className="w-20 h-20 bg-white text-black flex items-center justify-center group-hover:bg-black group-hover:text-white transition-colors">
               <Plus size={48} />
             </div>
@@ -357,10 +477,12 @@ function Landing({ onLogin }: { onLogin: () => void }) {
               <h3 className="text-5xl font-black tracking-tighter uppercase">NEW IDENTITY.</h3>
               <p className="text-sm font-black uppercase tracking-widest opacity-60">Create your professional profile and claim your handle.</p>
             </div>
-            <Button className="w-full h-20 text-xl group-hover:bg-black group-hover:text-white">SIGN UP NOW</Button>
+            <Button disabled={isLoggingIn} className="w-full h-20 text-xl group-hover:bg-black group-hover:text-white">
+              {isLoggingIn ? '...' : 'SIGN UP NOW'}
+            </Button>
           </div>
 
-          <div className="p-16 border-4 border-zinc-800 space-y-10 text-left bg-black group hover:border-white transition-all cursor-pointer" onClick={onLogin}>
+          <div className="p-16 border-4 border-zinc-800 space-y-10 text-left bg-black group hover:border-white transition-all cursor-pointer" onClick={() => !isLoggingIn && onLogin()}>
             <div className="w-20 h-20 bg-zinc-900 text-white flex items-center justify-center group-hover:bg-white group-hover:text-black transition-colors">
               <LayoutDashboard size={48} />
             </div>
@@ -368,7 +490,9 @@ function Landing({ onLogin }: { onLogin: () => void }) {
               <h3 className="text-5xl font-black tracking-tighter uppercase">EXISTING USER.</h3>
               <p className="text-sm font-black uppercase tracking-widest opacity-60">Access your dashboard and manage your TACTIK card.</p>
             </div>
-            <Button variant="outline" className="w-full h-20 text-xl">LOG IN HERE</Button>
+            <Button disabled={isLoggingIn} variant="outline" className="w-full h-20 text-xl">
+              {isLoggingIn ? '...' : 'LOG IN HERE'}
+            </Button>
           </div>
         </div>
       </section>
@@ -386,8 +510,8 @@ function Landing({ onLogin }: { onLogin: () => void }) {
             </div>
             <p className="text-zinc-400 text-xs font-black uppercase tracking-widest">Authorized Personnel Only</p>
           </div>
-          <Button onClick={onLogin} className="w-full h-20 text-xl">
-            AUTHENTICATE WITH GOOGLE
+          <Button onClick={onLogin} disabled={isLoggingIn} className="w-full h-20 text-xl">
+            {isLoggingIn ? 'AUTHENTICATING...' : 'AUTHENTICATE WITH GOOGLE'}
           </Button>
           <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-zinc-600">
             <span>Encrypted</span>
@@ -408,8 +532,8 @@ function Landing({ onLogin }: { onLogin: () => void }) {
         <div className="text-[12px] uppercase tracking-[0.6em] text-zinc-600 font-black text-center md:text-left">
           © 2026 TACTIK DIGITAL IDENTITY.
         </div>
-        <Button onClick={onLogin} variant="secondary" className="h-20 px-16">
-          GET STARTED
+        <Button onClick={onLogin} disabled={isLoggingIn} variant="secondary" className="h-20 px-16">
+          {isLoggingIn ? '...' : 'GET STARTED'}
         </Button>
       </footer>
     </div>
@@ -528,7 +652,7 @@ function Onboarding({ uid, onComplete }: { uid: string; onComplete: () => void }
       await setDoc(userRef, { uid });
       onComplete();
     } catch (e) {
-      setError('Something went wrong');
+      handleFirestoreError(e, OperationType.WRITE, `profiles/${uid}`);
     }
   };
 
@@ -598,7 +722,7 @@ function Dashboard({ profile, onUpdate }: { profile: UserProfile; onUpdate: (p: 
       await updateDoc(docRef, { ...editing, updatedAt: new Date().toISOString() });
       onUpdate(editing);
     } catch (e) {
-      console.error(e);
+      handleFirestoreError(e, OperationType.UPDATE, `profiles/${profile.uid}`);
     }
     setSaving(false);
   };
@@ -870,12 +994,12 @@ function OrderModal({ profile, onClose, onOrderSuccess }: { profile: UserProfile
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      await setDoc(doc(collection(db, 'orders')), orderData);
+      const orderRef = doc(collection(db, 'orders'));
+      await setDoc(orderRef, orderData);
       setSuccess(true);
       onOrderSuccess();
     } catch (e) {
-      console.error(e);
-      alert('Order failed');
+      handleFirestoreError(e, OperationType.CREATE, 'orders');
     }
     setOrdering(false);
   };
@@ -974,7 +1098,7 @@ function AdminOrders({ isAdmin }: { isAdmin: boolean }) {
     try {
       await updateDoc(doc(db, 'orders', id), { status, updatedAt: new Date().toISOString() });
     } catch (e) {
-      console.error(e);
+      handleFirestoreError(e, OperationType.UPDATE, `orders/${id}`);
     }
   };
 
@@ -983,7 +1107,7 @@ function AdminOrders({ isAdmin }: { isAdmin: boolean }) {
     try {
       await deleteDoc(doc(db, 'orders', id));
     } catch (e) {
-      console.error(e);
+      handleFirestoreError(e, OperationType.DELETE, `orders/${id}`);
     }
   };
 
